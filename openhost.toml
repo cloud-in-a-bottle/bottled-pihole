@@ -1,0 +1,55 @@
+[app]
+name = "pihole"
+version = "0.1.0"
+description = "Pi-hole network-wide DNS-based ad-blocker for OpenHost (DNS on :53, admin UI with one-click owner SSO)"
+authors = ["Andrew Laack <andrew@laack.co>"]
+
+[runtime.container]
+image = "Dockerfile"
+# OpenHost-routed HTTP port. The auth-proxy listens here and forwards to
+# Pi-hole's web admin UI on loopback :8053. The OpenHost router gates this
+# behind zone_auth and stamps X-OpenHost-Is-Owner: true on owner requests.
+port = 8080
+
+# DNS over UDP and TCP. Pi-hole IS a DNS server -- the whole point is that
+# user devices (phones, laptops, routers) configure it as their DNS server.
+# Both protocols are needed: UDP/53 is the default for queries, TCP/53 is
+# used for DNSSEC and large responses (>512 bytes / EDNS).
+#
+# OpenHost binds host_port on 0.0.0.0 for both TCP and UDP, so a single
+# [[ports]] entry maps both. The cloud security group on the OpenHost VM
+# MUST allow inbound UDP/53 and TCP/53 from wherever clients live (home
+# LAN, VPN, etc.) -- on EC2 the openhost-vm-manager security group blocks
+# UDP by default and you have to amend it; on Hetzner the default is open.
+# See README.md for details.
+[[ports]]
+label = "dns"
+container_port = 53
+host_port = 53
+
+[routing]
+# Auth-proxy serves a static 200 here so the OpenHost healthcheck doesn't
+# hit Pi-hole's admin UI (which 302s anonymous visitors to /admin/login.lp
+# and would confuse the healthcheck).
+health_check = "/_healthz"
+
+# Anonymous visitors should never see the Pi-hole admin UI. The single
+# entry below lets the auth-proxy serve /_healthz without zone_auth so the
+# OpenHost router's polling-healthcheck succeeds. Everything else
+# (including /admin/, /api/, static assets) is gated behind owner auth at
+# the router layer; the auth-proxy's job is to mint a Pi-hole session for
+# the owner on first navigation.
+public_paths = ["/_healthz"]
+
+[resources]
+# Pi-hole is light: ~150 MiB resident (FTL + lighttpd-replacement) plus
+# whatever the gravity DB grows to (a few MiB per million blocked
+# domains). 512 MiB gives generous headroom; bump if you load a lot of
+# blocklists.
+memory_mb = 512
+cpu_millicores = 500
+
+[data]
+# Persistent: /etc/pihole (config, gravity.db, sessions), DNS query log,
+# bootstrap-generated webpassword.txt.
+app_data = true
