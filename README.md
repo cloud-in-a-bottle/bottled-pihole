@@ -90,7 +90,7 @@ need to amend the security group manually:
 
 The Pi-hole admin's status pages (`/admin/network`, the dashboard) will
 reflect whichever DNS clients actually reach the box. If the cloud
-firewall is blocking UDP 53, the dashboard will show no queries even
+firewall is blocking the DNS port, the dashboard will show no queries even
 though the admin UI is reachable -- the test below diagnoses this.
 
 ## DNS-over-HTTPS (DoH)
