@@ -16,11 +16,16 @@ Auth model
                                         capture the returned SID, echo
                                         a Set-Cookie on a 302 to the
                                         original URL.
-  * /_healthz                        -- Static 200; never reaches Pi-hole.
-                                        OpenHost's healthcheck polls
-                                        this; Pi-hole's own / 302s
-                                        anonymous visitors which would
-                                        confuse the polling.
+   * /_healthz                        -- Static 200; never reaches Pi-hole.
+                                         OpenHost's healthcheck polls
+                                         this; Pi-hole's own / 302s
+                                         anonymous visitors which would
+                                         confuse the polling.
+   * /dns-query (GET or POST)        -- DNS-over-HTTPS (RFC 8484).
+                                         Public (no zone_auth needed).
+                                         Sends the DNS wire query to
+                                         Pi-hole over TCP and returns
+                                         the response.
 
 Security notes
 ==============
@@ -65,11 +70,13 @@ Implementation notes
 
 from __future__ import annotations
 
+import base64
 import http.client
 import json
 import logging
 import os
 import socket
+import struct
 import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -112,6 +119,10 @@ MAX_BODY_BYTES = 100 * 1024 * 1024
 
 PIHOLE_API_AUTH_PATH = "/api/auth"
 HEALTHZ_PATH = "/_healthz"
+DOH_PATH = "/dns-query"
+DOH_CONTENT_TYPE = "application/dns-message"
+DNS_TCP_TIMEOUT = 10
+MAX_DNS_MESSAGE = 65535
 
 logging.basicConfig(
     level=os.environ.get("AUTH_PROXY_LOG_LEVEL", "INFO"),
@@ -153,6 +164,39 @@ def _read_password(pwfile: str) -> str | None:
         log.warning("could not read %s: %s", pwfile, exc)
         return None
     return value or None
+
+
+def _dns_query_tcp(host: str, port: int, wire: bytes) -> bytes | None:
+    """Send a raw DNS query over TCP and return the response wire bytes."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(DNS_TCP_TIMEOUT)
+        s.connect((host, port))
+        s.sendall(struct.pack(">H", len(wire)) + wire)
+        length_buf = b""
+        while len(length_buf) < 2:
+            chunk = s.recv(2 - len(length_buf))
+            if not chunk:
+                return None
+            length_buf += chunk
+        resp_len = struct.unpack(">H", length_buf)[0]
+        if resp_len > MAX_DNS_MESSAGE:
+            return None
+        data = b""
+        while len(data) < resp_len:
+            chunk = s.recv(resp_len - len(data))
+            if not chunk:
+                return None
+            data += chunk
+        return data
+    except (OSError, struct.error) as exc:
+        log.warning("DNS TCP query failed: %s", exc)
+        return None
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
 
 
 def _login_to_pihole(
@@ -225,6 +269,8 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
     upstream_host: str = "127.0.0.1"
     upstream_port: int = 8053
     pwfile: str = "/data/app_data/pihole/webpassword.txt"
+    dns_host: str = "127.0.0.1"
+    dns_port: int = 5353
 
     # The default BaseHTTPRequestHandler.log_message goes to stderr
     # with timestamps; ours adds a slight prefix and silences the
@@ -285,6 +331,73 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
         except OSError as exc:
             log.debug("client disconnected during healthz: %s", exc)
 
+    def _serve_doh(self) -> None:
+        """Handle DNS-over-HTTPS requests (RFC 8484).
+
+        GET  /dns-query?dns=<base64url>       -> application/dns-message
+        POST /dns-query  (body is raw wire)   -> application/dns-message
+        """
+        wire: bytes | None = None
+
+        if self.command == "GET":
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            dns_param = params.get("dns", [None])[0]
+            if not dns_param:
+                self._safe_send_error(400, "missing dns parameter")
+                return
+            try:
+                wire = base64.urlsafe_b64decode(dns_param + "==")
+            except Exception:
+                self._safe_send_error(400, "invalid base64url in dns parameter")
+                return
+        elif self.command == "POST":
+            ct = self.headers.get("Content-Type", "")
+            if DOH_CONTENT_TYPE not in ct.lower():
+                self._safe_send_error(415, "expected application/dns-message")
+                return
+            cl = self.headers.get("Content-Length")
+            if not cl:
+                self._safe_send_error(400, "missing Content-Length")
+                return
+            try:
+                length = int(cl)
+            except ValueError:
+                self._safe_send_error(400, "invalid Content-Length")
+                return
+            if length < 12 or length > MAX_DNS_MESSAGE:
+                self._safe_send_error(400, "invalid DNS message size")
+                return
+            try:
+                wire = self.rfile.read(length)
+            except (OSError, TimeoutError):
+                self._safe_send_error(400, "read failed")
+                return
+        else:
+            self._safe_send_error(405, "Method Not Allowed")
+            return
+
+        if not wire or len(wire) < 12:
+            self._safe_send_error(400, "DNS message too short")
+            return
+
+        resp = _dns_query_tcp(self.dns_host, self.dns_port, wire)
+        if resp is None:
+            self._safe_send_error(502, "DNS backend error")
+            return
+
+        try:
+            self.send_response(200, "OK")
+            self.send_header("Content-Type", DOH_CONTENT_TYPE)
+            self.send_header("Content-Length", str(len(resp)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(resp)
+        except OSError as exc:
+            log.debug("client disconnected during DoH response: %s", exc)
+
     # ---- main dispatch -----------------------------------------------
 
     def _dispatch(self) -> None:
@@ -297,6 +410,10 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
         if path == HEALTHZ_PATH or path.startswith(HEALTHZ_PATH + "?"):
             self._serve_healthz()
+            return
+
+        if path == DOH_PATH or path.startswith(DOH_PATH + "?"):
+            self._serve_doh()
             return
 
         is_owner = self.headers.get(OWNER_HEADER_NAME, "").lower() == "true"
@@ -531,9 +648,18 @@ def main() -> int:
         "AUTH_PROXY_PWFILE", "/data/app_data/pihole/webpassword.txt"
     )
 
+    try:
+        dns_port = _port_from_env("AUTH_PROXY_DNS_PORT", 5353)
+    except ValueError as exc:
+        log.error("invalid port configuration: %s", exc)
+        return 1
+    dns_host = os.environ.get("AUTH_PROXY_DNS_HOST", "127.0.0.1").strip()
+
     AuthProxyHandler.upstream_host = upstream_host
     AuthProxyHandler.upstream_port = upstream_port
     AuthProxyHandler.pwfile = pwfile
+    AuthProxyHandler.dns_host = dns_host
+    AuthProxyHandler.dns_port = dns_port
 
     try:
         server = IPv4ThreadingServer(("0.0.0.0", listen_port), AuthProxyHandler)

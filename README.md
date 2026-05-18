@@ -54,6 +54,7 @@ If that's not acceptable, you have two options:
 | Port  | Protocol  | Where               | Purpose                                                |
 |-------|-----------|---------------------|--------------------------------------------------------|
 | 8080  | TCP/HTTP  | OpenHost router     | Auth-proxy → Pi-hole admin UI (gated by zone_auth)     |
+| 8080  | TCP/HTTPS | OpenHost router     | DoH endpoint at `/dns-query` (public, no auth needed)  |
 | 5353  | UDP + TCP | Direct (host:5353)  | DNS resolver -- the user-facing service                |
 | 8053  | TCP/HTTP  | Loopback only       | Pi-hole's embedded webserver; the auth-proxy upstream  |
 
@@ -91,6 +92,29 @@ The Pi-hole admin's status pages (`/admin/network`, the dashboard) will
 reflect whichever DNS clients actually reach the box. If the cloud
 firewall is blocking UDP 53, the dashboard will show no queries even
 though the admin UI is reachable -- the test below diagnoses this.
+
+## DNS-over-HTTPS (DoH)
+
+The auth-proxy serves a standard RFC 8484 DoH endpoint at `/dns-query`.
+This path is public (no zone_auth required) so browsers and OS-level
+DoH clients can use it directly. TLS is handled by the OpenHost router
+(Caddy).
+
+**Brave / Chrome / Edge / Firefox secure DNS URL:**
+
+```
+https://pihole.andrew-1.selfhost.imbue.com/dns-query
+```
+
+In Brave: Settings → Privacy and security → Security → Use secure DNS →
+With Custom → paste the URL above.
+
+Verify from the command line:
+
+```bash
+curl -sk "https://pihole.<zone>/dns-query?dns=AAABAAABAAAAAAAAB2dvb2dsZQNjb20AAAEAAQ" \
+  -H "Accept: application/dns-message" -o - | xxd | head
+```
 
 ## Setting it up as your DNS server
 
@@ -197,11 +221,9 @@ dig +short google.com @<openhost-host> -p 5353
   don't expose those ports (`67/udp`, `123/udp`). If you want them, add
   `[[ports]]` entries to `openhost.toml` and adjust the relevant
   `FTLCONF_dhcp_*` / `FTLCONF_ntp_*` env vars.
-* **Self-signed TLS for `:443` is unused.** The OpenHost router does
-  TLS termination on `:443` for the HTTP rail; Pi-hole's own self-signed
-  cert never sees the public Internet. If you want DNS-over-HTTPS or
-  DNS-over-TLS, you'd add another `[[ports]]` mapping for 853 and
-  configure FTL accordingly.
+* **No DNS-over-TLS (DoT).** DoH is supported via `/dns-query` (see
+  above). DoT on port 853 is not currently exposed. If you need it,
+  add a `[[ports]]` entry for 853 and configure FTL accordingly.
 * **Logout doesn't quite work.** The Pi-hole admin "Logout" button
   sends `DELETE /api/auth`, invalidating the SID. The next HTML
   navigation triggers our auto-login dance and silently re-mints a new

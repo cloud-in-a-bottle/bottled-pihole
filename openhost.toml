@@ -44,7 +44,7 @@ health_check = "/_healthz"
 # (including /admin/, /api/, static assets) is gated behind owner auth at
 # the router layer; the auth-proxy's job is to mint a Pi-hole session for
 # the owner on first navigation.
-public_paths = ["/_healthz"]
+public_paths = ["/_healthz", "/dns-query"]
 
 [resources]
 # Pi-hole is light: ~150 MiB resident (FTL + lighttpd-replacement) plus
