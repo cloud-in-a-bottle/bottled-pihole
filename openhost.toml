@@ -13,19 +13,24 @@ port = 8080
 
 # DNS over UDP and TCP. Pi-hole IS a DNS server -- the whole point is that
 # user devices (phones, laptops, routers) configure it as their DNS server.
-# Both protocols are needed: UDP/53 is the default for queries, TCP/53 is
-# used for DNSSEC and large responses (>512 bytes / EDNS).
+# Both protocols are needed: UDP for normal queries, TCP for DNSSEC and
+# large responses (>512 bytes / EDNS).
 #
 # OpenHost binds host_port on 0.0.0.0 for both TCP and UDP, so a single
-# [[ports]] entry maps both. The cloud security group on the OpenHost VM
-# MUST allow inbound UDP/53 and TCP/53 from wherever clients live (home
-# LAN, VPN, etc.) -- on EC2 the openhost-vm-manager security group blocks
-# UDP by default and you have to amend it; on Hetzner the default is open.
+# [[ports]] entry maps both.
+#
+# Default host_port is 5353 instead of 53 because OpenHost's CoreDNS
+# occupies port 53 for zone-authoritative DNS and ACME DNS-01 challenges.
+# If CoreDNS is disabled on your instance, change host_port to 53.
+# Clients query: dig @<host> -p 5353 example.com
+#
+# The cloud security group on the OpenHost VM MUST allow inbound
+# UDP/5353 and TCP/5353 from wherever clients live (home LAN, VPN, etc.).
 # See README.md for details.
 [[ports]]
 label = "dns"
 container_port = 53
-host_port = 53
+host_port = 5353
 
 [routing]
 # Auth-proxy serves a static 200 here so the OpenHost healthcheck doesn't

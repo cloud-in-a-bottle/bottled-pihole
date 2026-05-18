@@ -54,31 +54,37 @@ If that's not acceptable, you have two options:
 | Port  | Protocol  | Where               | Purpose                                                |
 |-------|-----------|---------------------|--------------------------------------------------------|
 | 8080  | TCP/HTTP  | OpenHost router     | Auth-proxy → Pi-hole admin UI (gated by zone_auth)     |
-| 53    | UDP + TCP | Direct (host:53)    | DNS resolver -- the user-facing service                |
+| 5353  | UDP + TCP | Direct (host:5353)  | DNS resolver -- the user-facing service                |
 | 8053  | TCP/HTTP  | Loopback only       | Pi-hole's embedded webserver; the auth-proxy upstream  |
 
 The HTTP rail (`8080`) goes through OpenHost's reverse proxy and
-inherits zone_auth. The DNS rail (`53/udp`+`53/tcp`) is published
+inherits zone_auth. The DNS rail (`5353/udp`+`5353/tcp`) is published
 directly on the host VM via OpenHost's `[[ports]]` mechanism and
 **bypasses Caddy and zone_auth entirely** -- DNS clients have no
 zone_auth credentials to present.
 
+The default host port is **5353** instead of the standard 53 because
+OpenHost runs CoreDNS on port 53 for zone-authoritative DNS and ACME
+DNS-01 certificate challenges. If CoreDNS is disabled on your instance,
+edit `openhost.toml` and set `host_port = 53` for the standard port.
+Clients must specify the port explicitly: `dig @<host> -p 5353 example.com`.
+
 ### Cloud firewall caveats
 
-Most cloud VMs block UDP/53 inbound by default; you'll need to amend
-the security group manually:
+Most cloud VMs block non-standard UDP ports inbound by default; you'll
+need to amend the security group manually:
 
 * **EC2 / openhost-vm-manager.** The default security group blocks all
-  UDP. You'll have to amend it to allow `0.0.0.0/0:53/udp` and
-  `0.0.0.0/0:53/tcp` (or restrict to your home IP). At time of writing
-  this requires editing the security group via the AWS console or CLI;
-  vm-manager's UI does not expose UDP rules.
+  UDP. You'll have to amend it to allow `0.0.0.0/0:5353/udp` and
+  `0.0.0.0/0:5353/tcp` (or restrict to your home IP). At time of
+  writing this requires editing the security group via the AWS console
+  or CLI; vm-manager's UI does not expose UDP rules.
 * **Hetzner.** Default firewall is open; nothing to do.
 * **Self-hosted (bare metal).** Make sure your home router's
-  inbound-NAT rules forward 53/udp + 53/tcp to the OpenHost VM if you
+  inbound-NAT rules forward the DNS port to the OpenHost VM if you
   want clients on the public Internet to reach it. **You probably do
   NOT want that** -- a public Pi-hole is an open DNS resolver, ripe for
-  DNS amplification abuse. Only expose 53 to networks you trust (LAN,
+  DNS amplification abuse. Only expose DNS to networks you trust (LAN,
   WireGuard subnet, etc.).
 
 The Pi-hole admin's status pages (`/admin/network`, the dashboard) will
@@ -88,25 +94,22 @@ though the admin UI is reachable -- the test below diagnoses this.
 
 ## Setting it up as your DNS server
 
-Once 53/udp is reachable, point your devices at:
+Once the DNS port is reachable, point your devices at:
 
 ```
-DNS server: <openhost-host>     (e.g. pihole.andrew-1.selfhost.imbue.com or just the VM's public IP)
+DNS server: <openhost-host>     (e.g. the VM's public IP)
+DNS port:   5353                (non-standard; some clients don't support custom ports)
 ```
 
-The hostname must resolve from your client device. If you point your
-LAN clients at the OpenHost zone hostname, your existing DNS server
-(e.g. your home router) is involved in resolving it -- a chicken-and-egg
-loop if you blow away your existing DNS settings. Two ways out:
+The default port is 5353. Clients must specify it explicitly. Not all
+devices support custom DNS ports; for those, you'll need to either
+disable CoreDNS and change `host_port` to 53, or use a DNS forwarder
+on your LAN that proxies standard port 53 to the Pi-hole's 5353.
 
-1. Use the VM's public IPv4 address directly (not the hostname).
-2. On your home router, set Pi-hole as a *secondary* DNS so it falls
-   back if Pi-hole becomes unreachable.
-
-Verify resolution from a host outside your network:
+Verify resolution:
 
 ```bash
-dig +short google.com @pihole.andrew-1.selfhost.imbue.com
+dig +short google.com @<openhost-host> -p 5353
 # 142.251.x.y    <- success
 ```
 
@@ -114,7 +117,6 @@ Or from inside the VM (loopback, not subject to the cloud firewall):
 
 ```bash
 oh app logs pihole | head -100        # confirm FTL is up
-ssh host@<openhost-host> 'dig +short google.com @127.0.0.1 -p 53'
 ```
 
 ## Configuration
@@ -177,12 +179,17 @@ curl -sk -o /dev/null "https://$HOST/admin/" -w 'HTTP=%{http_code}\n'
 DNS resolution test:
 
 ```bash
-dig +short google.com @<openhost-host> -p 53
-# If this fails: cloud firewall is probably blocking UDP 53.
+dig +short google.com @<openhost-host> -p 5353
+# If this fails: cloud firewall is probably blocking UDP 5353.
 ```
 
 ## Known limitations
 
+* **DNS on non-standard port (5353).** OpenHost's CoreDNS occupies
+  port 53 for zone-authoritative DNS and ACME DNS-01 challenges.
+  Pi-hole defaults to host port 5353 to avoid the conflict. Not all
+  client devices support custom DNS ports. To use standard port 53,
+  disable CoreDNS on your instance and edit `openhost.toml`.
 * **Single-tenant by design.** Pi-hole only has one admin account.
   Anyone with OpenHost zone_auth access becomes the admin. Don't deploy
   this on a multi-tenant zone.
