@@ -39,7 +39,7 @@ RUN chmod 0755 \
 # Keep the upstream image's EXPOSE intact.  OpenHost's [[ports]] handles
 # the 53 TCP+UDP mapping; the manifest's `port` field handles 8080 for
 # the web admin (via the auth-proxy).
-EXPOSE 53/tcp 53/udp 8080/tcp
+EXPOSE 5353/tcp 5353/udp 8080/tcp
 
 # tini reaps zombies and forwards SIGTERM cleanly to start.sh, which
 # supervises both the upstream pihole entrypoint and our auth-proxy via

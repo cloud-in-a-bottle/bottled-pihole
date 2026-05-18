@@ -29,7 +29,7 @@ port = 8080
 # See README.md for details.
 [[ports]]
 label = "dns"
-container_port = 53
+container_port = 5353
 host_port = 5353
 
 [routing]

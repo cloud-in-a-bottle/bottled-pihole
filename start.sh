@@ -116,8 +116,14 @@ export FTLCONF_webserver_domain="$PUBLIC_HOST"
 
 # DNS listens on all interfaces inside the container. Inside the
 # container "all interfaces" is just eth0 + lo; OpenHost's host-port
-# mapping then publishes 0.0.0.0:53 externally.
+# mapping then publishes 0.0.0.0:<host_port> externally.
 export FTLCONF_dns_listeningMode='ALL'
+
+# Bind DNS on port 5353 inside the container. Rootless podman cannot
+# grant CAP_NET_BIND_SERVICE to unprivileged users, so FTL cannot bind
+# port 53 directly. The [[ports]] mapping in openhost.toml translates
+# host port -> container port 5353.
+export FTLCONF_dns_port='5353'
 
 # Set the API password from the bootstrap-generated file. This is the
 # password the auth-proxy POSTs to /api/auth.
@@ -138,7 +144,7 @@ export FTLCONF_dns_piholePTR='PI.HOLE'
 # log volume.
 export TAIL_FTL_LOG="${TAIL_FTL_LOG:-1}"
 
-log "WEBPASSWORD persisted; admin UI on http://127.0.0.1:8053; DNS on :53"
+log "WEBPASSWORD persisted; admin UI on http://127.0.0.1:8053; DNS on :5353"
 
 # --- launch the upstream entrypoint + the auth-proxy ------------------
 
