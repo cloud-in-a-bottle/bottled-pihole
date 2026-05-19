@@ -439,14 +439,52 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
         if (
             is_owner
-            and not has_sid
             and is_html_navigation
             and not is_api
         ):
-            if self._maybe_auto_login():
+            # Auto-login when the owner has no sid cookie, OR when the
+            # existing sid is expired/invalid. We validate by hitting
+            # Pi-hole's /api/auth with the sid; if it comes back
+            # invalid, we mint a fresh session.
+            need_login = not has_sid
+            if has_sid and not self._is_sid_valid(cookies.get(PIHOLE_SID_COOKIE, "")):
+                need_login = True
+            if need_login and self._maybe_auto_login():
                 return
 
         self._proxy()
+
+    def _is_sid_valid(self, sid: str) -> bool:
+        """Check if a Pi-hole session ID is still valid."""
+        if not sid:
+            return False
+        conn = http.client.HTTPConnection(
+            self.upstream_host, self.upstream_port, timeout=5
+        )
+        try:
+            conn.request(
+                "GET",
+                "/api/auth",
+                headers={
+                    "Host": f"{self.upstream_host}:{self.upstream_port}",
+                    "Cookie": f"sid={sid}",
+                    "X-FTL-SID": sid,
+                },
+            )
+            resp = conn.getresponse()
+            body = resp.read()
+            if resp.status != 200:
+                return False
+            parsed = json.loads(body.decode("utf-8"))
+            session = parsed.get("session") or {}
+            return bool(session.get("valid"))
+        except Exception:
+            return False
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _maybe_auto_login(self) -> bool:
         password = _read_password(self.pwfile)
@@ -524,8 +562,6 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                 ("Host", f"{self.upstream_host}:{self.upstream_port}")
             )
 
-        # Don't accept Transfer-Encoding: chunked from clients; we
-        # want a single Content-Length we can validate.
         transfer_encoding = self.headers.get("Transfer-Encoding", "").lower().strip()
         if transfer_encoding and transfer_encoding != "identity":
             self._safe_send_error(501, "Transfer-Encoding not supported")
