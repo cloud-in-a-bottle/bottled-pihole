@@ -92,52 +92,58 @@ python3 /opt/openhost-pihole/bootstrap.py
 WEBPASSWORD="$(cat "$PWFILE")"
 chmod 0600 "$PWFILE"
 
-# --- export FTLCONF_* env vars ----------------------------------------
+# --- FTLCONF_* env vars (locked settings) -----------------------------
 #
-# Pi-hole v6 reads any setting from FTLCONF_<section>_<key> env vars.
-# These take precedence over /etc/pihole/pihole.toml, so they're the
-# safest way to inject our wiring (the toml file is operator-editable
-# via the admin UI; env vars are read-only from FTL's POV).
+# Pi-hole v6 locks any setting configured via FTLCONF_* env vars so it
+# cannot be changed through the web UI. Only use env vars for settings
+# that MUST be locked to keep the container wiring intact. Everything
+# else goes into pihole.toml so the operator can edit it from the
+# admin interface.
 
-# Pi-hole's web admin port. Bind to loopback so external traffic cannot
-# bypass the OpenHost router + auth-proxy. Port 8053 is arbitrary; the
-# auth-proxy connects to 127.0.0.1:8053.
+# Webserver binds to loopback only -- the auth-proxy is the sole client.
 export FTLCONF_webserver_port='127.0.0.1:8053'
-
-# Restrict the embedded mongoose webserver to connections from
-# 127.0.0.1. The auth-proxy is the only client; defense in depth in
-# case someone publishes the wrong port. Note: the pihole webserver
-# already binds 127.0.0.1 above so this is redundant but cheap.
 export FTLCONF_webserver_acl='+127.0.0.1,+[::1]'
 
-# Use the OpenHost public hostname so cookies/redirects are issued
-# against the right domain.
-export FTLCONF_webserver_domain="$PUBLIC_HOST"
-
-# DNS listens on all interfaces inside the container. Inside the
-# container "all interfaces" is just eth0 + lo; OpenHost's host-port
-# mapping then publishes 0.0.0.0:<host_port> externally.
-export FTLCONF_dns_listeningMode='ALL'
-
-# Bind DNS on port 5353 inside the container. Rootless podman cannot
-# grant CAP_NET_BIND_SERVICE to unprivileged users, so FTL cannot bind
-# port 53 directly. The [[ports]] mapping in openhost.toml translates
-# host port -> container port 5353.
+# DNS on port 5353 -- rootless podman cannot bind port 53.
 export FTLCONF_dns_port='5353'
 
-# Set the API password from the bootstrap-generated file. This is the
-# password the auth-proxy POSTs to /api/auth.
+# API password must match what the auth-proxy uses to mint sessions.
 export FTLCONF_webserver_api_password="$WEBPASSWORD"
 
-# Sensible default upstream resolvers. Operators can override via
-# FTLCONF_dns_upstreams (newline-separated) at deploy time.
-if [[ -z "${FTLCONF_dns_upstreams:-}" ]]; then
-    export FTLCONF_dns_upstreams=$'1.1.1.1\n1.0.0.1\n8.8.8.8\n8.8.4.4'
-fi
+# --- pihole.toml defaults (user-editable) -----------------------------
+#
+# Seed sensible defaults into pihole.toml on first boot. The operator
+# can change these via the admin UI afterwards. We only write values
+# that aren't already present so user changes survive container restarts.
 
-# Don't display Pi-hole's own internal pi.hole DNS records to clients
-# we don't own.
-export FTLCONF_dns_piholePTR='PI.HOLE'
+TOML_FILE="$PIHOLE_PERSIST/pihole.toml"
+_seed_toml() {
+    local key="$1" value="$2"
+    if ! grep -q "$key" "$TOML_FILE" 2>/dev/null; then
+        echo "$key = $value" >> "$TOML_FILE"
+    fi
+}
+
+mkdir -p "$(dirname "$TOML_FILE")"
+touch "$TOML_FILE"
+
+# Seed [webserver] section
+if ! grep -q '^\[webserver\]' "$TOML_FILE" 2>/dev/null; then
+    echo "" >> "$TOML_FILE"
+    echo "[webserver]" >> "$TOML_FILE"
+fi
+_seed_toml "domain" "\"$PUBLIC_HOST\""
+
+# Seed [dns] section
+if ! grep -q '^\[dns\]' "$TOML_FILE" 2>/dev/null; then
+    echo "" >> "$TOML_FILE"
+    echo "[dns]" >> "$TOML_FILE"
+fi
+_seed_toml "upstreams" '["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4"]'
+_seed_toml "listeningMode" '"ALL"'
+_seed_toml "piholePTR" '"PI.HOLE"'
+
+chown pihole:pihole "$TOML_FILE" 2>/dev/null || true
 
 # Disable the upstream container's TAIL_FTL_LOG noise unless explicitly
 # requested -- our supervisor + the auth-proxy already produce enough
