@@ -1,7 +1,7 @@
 [app]
 name = "pihole"
 version = "0.1.0"
-description = "Pi-hole network-wide DNS-based ad-blocker for OpenHost (DNS on :53, admin UI with one-click owner SSO)"
+description = "Pi-hole network-wide DNS-based ad-blocker for Cloud in a Bottle (DNS on :53, admin UI with one-click owner SSO)"
 authors = ["Andrew Laack <andrew@laack.co>"]
 
 [runtime.container]
