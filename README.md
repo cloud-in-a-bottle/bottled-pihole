@@ -229,3 +229,9 @@ dig +short google.com @<openhost-host> -p 5353
   navigation triggers our auto-login dance and silently re-mints a new
   session, so the user appears to "stay logged in". Acceptable
   trade-off; the Cloud in a Bottle zone_auth gate is the real boundary.
+
+## License
+
+Pi-hole is licensed under the European Union Public Licence v. 1.2 (EUPL-1.2).
+The Cloud in a Bottle packaging files in this repository are MIT-licensed. See
+`LICENSE` and `NOTICE` for details.
