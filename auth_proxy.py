@@ -122,6 +122,7 @@ HEALTHZ_PATH = "/_healthz"
 DOH_PATH = "/dns-query"
 DOH_CONTENT_TYPE = "application/dns-message"
 DNS_TCP_TIMEOUT = 10
+DNS_UDP_TIMEOUT = 5
 MAX_DNS_MESSAGE = 65535
 
 logging.basicConfig(
@@ -191,6 +192,32 @@ def _dns_query_tcp(host: str, port: int, wire: bytes) -> bytes | None:
         return data
     except (OSError, struct.error) as exc:
         log.warning("DNS TCP query failed: %s", exc)
+        return None
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
+def _dns_query_udp(host: str, port: int, wire: bytes) -> bytes | None:
+    """Send a raw DNS query over UDP and return the response wire bytes.
+
+    Used as the primary transport for DoH since Pi-hole FTL reliably binds
+    UDP for DNS while TCP support depends on the FTL version and config.
+    Falls back to None on timeout or error so the caller can retry via TCP.
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(DNS_UDP_TIMEOUT)
+        s.sendto(wire, (host, port))
+        data, _ = s.recvfrom(MAX_DNS_MESSAGE)
+        # Check for truncation (TC bit set in flags byte 2, bit 1)
+        if len(data) >= 3 and (data[2] & 0x02):
+            return None  # caller should retry via TCP
+        return data
+    except (OSError, struct.error) as exc:
+        log.warning("DNS UDP query failed: %s", exc)
         return None
     finally:
         try:
@@ -381,7 +408,10 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
             self._safe_send_error(400, "DNS message too short")
             return
 
-        resp = _dns_query_tcp(self.dns_host, self.dns_port, wire)
+        resp = _dns_query_udp(self.dns_host, self.dns_port, wire)
+        if resp is None:
+            # UDP failed or response truncated; retry via TCP.
+            resp = _dns_query_tcp(self.dns_host, self.dns_port, wire)
         if resp is None:
             self._safe_send_error(502, "DNS backend error")
             return
@@ -642,6 +672,13 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                 for key, value in upstream.getheaders():
                     if key.lower() in HOP_BY_HOP_HEADERS:
                         continue
+                    # Pi-hole FTL sets the sid cookie without the Secure
+                    # flag. Since we serve over HTTPS exclusively, inject
+                    # it so the cookie is never sent over a cleartext
+                    # downgrade.
+                    if key.lower() == "set-cookie" and "sid=" in value:
+                        if "; Secure" not in value and "; secure" not in value:
+                            value += "; Secure"
                     self.send_header(key, value)
                 self.end_headers()
                 if self.command != "HEAD":
