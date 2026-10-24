@@ -7,7 +7,8 @@ def test_app_serves_owner(stack: OpenhostStack) -> None:
     # The app is marked running once its health check passes; "/" can take a little longer to come up.
     deadline = time.monotonic() + 60
     while True:
-        response = stack.owner_session.get(f"{stack.url}/", timeout=30)
+        # Accept like a browser navigation: some apps only redirect "/" to their UI for HTML requests (eg pihole).
+        response = stack.owner_session.get(f"{stack.url}/", headers={"Accept": "text/html"}, timeout=30)
         if response.status_code < 400 or time.monotonic() > deadline:
             break
         time.sleep(2)
