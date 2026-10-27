@@ -49,7 +49,7 @@ mkdir -p "$DATA_DIR" "$PIHOLE_PERSIST" "$DNSMASQ_PERSIST"
 # linking. The upstream image already copied seed files into
 # /etc/pihole at build time; we copy them across on first run if our
 # persistent dir is empty so the seed config + gravity DB are available.
-if [[ ! -L /etc/pihole ]]; then
+if false; then  # TEMP: keep /etc/pihole in the image
     if [[ -d /etc/pihole && ! -f "$PIHOLE_PERSIST/.openhost-seeded" ]]; then
         log "seeding $PIHOLE_PERSIST from /etc/pihole (first boot)"
         # cp -a preserves perms + ownership so pihole-FTL can read
