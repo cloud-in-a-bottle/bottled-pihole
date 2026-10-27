@@ -20,7 +20,7 @@
 # Our /usr/bin/start.sh REPLACES the upstream entrypoint. We re-exec the
 # upstream start.sh from inside our supervisor so we can run the
 # auth-proxy alongside it.
-FROM docker.io/pihole/pihole:latest
+FROM docker.io/pihole/pihole:2026.10.0@sha256:d34134716fc32038b052a8674c7c6879e0ff21f0e6d8af345166fffa2c27c113
 
 # Avoid interactive prompts; install tini + python.
 RUN apk add --no-cache python3 tini
