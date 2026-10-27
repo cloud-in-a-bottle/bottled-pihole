@@ -2,23 +2,29 @@ import contextlib
 import sqlite3
 import time
 
-import requests
 from openhost_test_harness import OpenhostStack
 
 DOMAIN = "ads.upstream-coverage.test"
 
 
-def test_settings_are_stored_in_app_data(stack: OpenhostStack, admin_session: requests.Session) -> None:
+def test_settings_are_stored_in_app_data(stack: OpenhostStack) -> None:
     """Pi-hole's config and gravity DB (/etc/pihole) live in the app data dir, so they survive redeploys and updates."""
-    session, sid = admin_session, admin_session.cookies["sid"]
-    api_headers = {"X-FTL-SID": sid, "X-FTL-CSRF": session.cookies.get("csrf") or ""}
-    response = session.post(
-        f"{stack.url}/api/domains/deny/exact",
-        json={"domain": DOMAIN, "comment": "upstream-coverage test"},
-        headers=api_headers,
-        timeout=30,
-    )
-    assert response.status_code in (200, 201), f"adding a denied domain: {response.status_code}: {response.text[:500]}"
+    # Log in to Pi-hole's API directly with the bootstrap password, independent of the owner auto-login.
+    password = (stack.data_dir / "webpassword.txt").read_text().strip()
+    session = stack.owner_session
+    auth = session.post(f"{stack.url}/api/auth", json={"password": password}, timeout=30)
+    assert auth.status_code == 200, f"Pi-hole API login: {auth.status_code}: {auth.text[:300]}"
+    api_headers = {"X-FTL-SID": auth.json()["session"]["sid"]}
+    try:
+        added = session.post(
+            f"{stack.url}/api/domains/deny/exact",
+            json={"domain": DOMAIN, "comment": "upstream-coverage test"},
+            headers=api_headers,
+            timeout=30,
+        )
+        assert added.status_code in (200, 201), f"adding a denied domain: {added.status_code}: {added.text[:500]}"
+    finally:
+        session.delete(f"{stack.url}/api/auth", headers=api_headers, timeout=30)
 
     gravity_db = stack.data_dir / "pihole" / "gravity.db"
     deadline = time.monotonic() + 30
