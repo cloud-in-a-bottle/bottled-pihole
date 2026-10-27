@@ -517,7 +517,6 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
                 pass
 
     def _maybe_auto_login(self) -> bool:
-        return False  # TEMP: no auto-login
         password = _read_password(self.pwfile)
         if not password:
             log.warning(
