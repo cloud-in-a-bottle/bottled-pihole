@@ -177,6 +177,11 @@ bottled-pihole/
   .gitignore
 ```
 
+`cloudinabottle.toml` sets `prebuilt_image`, so Cloud in a Bottle pulls our
+signed prebuilt image (built by CI from each release tag) instead of building
+the Dockerfile. To fork and modify this app, comment out `prebuilt_image` so
+your instance builds from source.
+
 ## Verifying the SSO
 
 ```bash
